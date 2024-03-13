@@ -1,0 +1,816 @@
+date()
+
+
+
+sig2u <- c(0.7)
+sig2 <- c(0.45)
+
+
+library(MASS)
+library(matrixcalc)
+library(MethylCapSig)
+library(mnormt)
+library(tmvtnorm)
+library(mvtnorm)
+Whole_data <- read.csv(file="~/Real/PM10.csv",
+          head=TRUE,sep=",")
+coor1 <- Whole_data$UTMX
+coor2 <- Whole_data$UTMY
+coordinate <- cbind(coor1,coor2)
+new_coor1 <- c(425, 4980)
+new_coor2 <- c(440, 5020)
+new_coordinate <- cbind(new_coor1,new_coor2)
+total_coor <- rbind(coordinate,new_coordinate)
+X_s <- function(n,mux,sig2x){
+  xx <- c(rnorm(n*1000, mux, sig2x))
+  xx1 <- c(0)
+  for(i in 1:n){
+    xx1[i] <- mean(xx[1000*i-999]:xx[1000*i])}
+  return(xx1)}
+U_s <- function(n,sig2u){
+  uu <- c(rnorm(n*1000, 0, sig2u))
+  uu1 <- c(0)
+  for(i in 1:n){
+    uu1[i] <- mean(uu[1000*i-999]:uu[1000*i])}
+  return(uu1)}
+eps_s <- function(n,sig2){
+  ep <- c(rnorm(n*1000, 0, sig2))
+  ep1 <- c(0)
+  for(i in 1:n){
+    ep1[i] <- mean(ep[1000*i-999]:ep[1000*i])}
+  return(ep1)}
+oldw <- getOption("warn")
+options(warn=-1)
+NORMMH <- function(total_coor){
+  NMH <- as.matrix(dist(total_coor))
+  return(NMH)}
+total_norm_mat <- NORMMH(total_coor)
+normmatrix <- NORMMH(coordinate)
+COVM_Lam <- function(total_norm_mat,nu,theta){
+  lvar <- (exp(nu^2)-1)*exp(-nu+(nu^2))
+  cl <- total_norm_mat
+  diag(cl) <- lvar
+  cl[lower.tri(cl)] <- exp(-total_norm_mat[lower.tri(total_norm_mat)]/theta)
+  cl[upper.tri(cl)] <- exp(-total_norm_mat[upper.tri(total_norm_mat)]/theta)
+  return(cl)}
+Lam_s <- function(n,nu,total_norm_mat,theta){
+  Lam_mean <- rep(exp(-nu/2+(nu^2/2)),n)
+  lvar <- (exp(nu^2)-1) * (exp(-nu+(nu^2)))
+  Lam_var <- COVM_Lam(total_norm_mat, nu=nu, theta=theta)
+  Lam <- mvlognormal(n=1000,
+                     Mu=Lam_mean,Sigma=rep(lvar,n),R=Lam_var)
+  Lam1 <- c(0)
+  for(i in 1:n){
+    Lam1[i] <- mean(Lam[,i])}
+  return(Lam1)}
+COVM_T0 <- function(total_norm_mat,gamma,theta){
+  cl <- total_norm_mat
+  diag(cl) <- gamma^2
+  cl[lower.tri(cl)] <- exp(-total_norm_mat[lower.tri(total_norm_mat)]/theta)
+  cl[upper.tri(cl)] <- exp(-total_norm_mat[upper.tri(total_norm_mat)]/theta)
+  return(cl)}
+T0_s <- function(n,gamma,theta,total_norm_mat){
+  T0_mean <- c(rep(0,n))
+  T0_var <- COVM_T0(total_norm_mat,gamma,theta)
+  T00 <- rmnorm(n=1000, mean=T0_mean, varcov=T0_var)
+  T0 <-c(0)
+  for(i in 1:n){
+    T0[i] <- mean(T00[,i])}
+  return(T0)}
+COVM_T1 <- function(total_norm_mat,alpha,theta){
+  cl <- total_norm_mat
+  diag(cl) <- alpha^2
+  cl[lower.tri(cl)] <- exp(-total_norm_mat[lower.tri(total_norm_mat)]/theta)
+  cl[upper.tri(cl)] <- exp(-total_norm_mat[upper.tri(total_norm_mat)]/theta)
+  return(cl)}
+T1_s <- function(n,alpha,theta,total_norm_mat){
+  T1_mean <- c(rep(0,n))
+  T1_var <- COVM_T1(total_norm_mat,alpha,theta)
+  T11 <- rtmvnorm(n=1000, mean=T1_mean, sigma=T1_var,
+                  #lower=rep(0,length(T1_mean)),
+                  upper = rep(0,n),algorithm="gibbs")
+  T1 <-c(0)
+  for(i in 1:n){
+    T1[i] <- mean(T11[,i])}
+  return(T1)}
+Xcond_MH <- function(n,y,beta0,Lam,T0,T1,
+                     mux,sig2x,X_k,sig2u,sig2,beta1,z){
+  b1 <- c(y-beta0-(1/sqrt(abs(Lam)))*(T0+T1))
+  firstsamp1 <- c(rnorm(n*1000,mux,sig2x))
+  firstsamp <- c(0)
+  for(i in 1:n){
+    firstsamp[i] <- mean(firstsamp1[1000*i-999]:firstsamp1[1000*i])}
+  # X_k <- firstsamp + rnorm(100,0,.1)
+  q_k <- c(dnorm(X_k,mux,sig2x))
+  q_star <- c(dnorm(firstsamp,mux,sig2x))
+  a <- sig2x/(sig2x+sig2u)
+  muxz <- (a*z)+(1-a)*c(rep(mux,n))
+  f_k <- c(0)
+  for(i in 1:n){
+    f_k[i] <- exp(-((2*sig2*sig2x*(1-a))^-1) *
+                    (sig2x*(1-a)*(beta1^2) * (X_k[i]^2) +
+                       sig2 * (X_k[i]^2) -
+                       2*sig2* X_k[i] * muxz[i] -
+                       2*sig2x*(1-a)*beta1 * X_k[i] * b1[i]))}
+  f_star <- c(0)
+  for(i in 1:n){f_star[i] <-
+    exp(-((2*sig2*sig2x*(1-a))^-1) *
+          (sig2x*(1-a)*(beta1^2) * (firstsamp[i]^2) +
+             sig2 * (firstsamp[i]^2) -
+             2*sig2* firstsamp[i] * muxz[i] -
+             2*sig2x*(1-a)*beta1 * firstsamp[i] * b1[i]))}
+  r_k <- c(0)
+  r_k <- (f_star*q_k)/(f_k*q_star)
+  for(i in 1:n){
+    if(is.nan(r_k[i])==TRUE){
+      r_k[i] <- 0}}
+  for(i in 1:n){if(runif(1) < min(1,r_k[i])){
+    X_k[i] <- firstsamp[i]}}
+  #return(plot(density(X_k)))
+  return(X_k)}
+T0cond <- function(n,y,beta0,beta1,X,Lam,T1,sig2,gamma,theta,total_norm_mat){
+  b2 <- c(y-beta0-beta1*X-(1/sqrt(abs(Lam)))*T1)
+  La1 <- c(1/Lam);La2 <- diag(La1);newT0 <- c(rep(0,n))
+  if(is.singular.matrix(COVM_T0(total_norm_mat,gamma,theta))==TRUE){
+    if(is.singular.matrix((1/sig2)*La2+
+                          (1/gamma^2)*(ginv(COVM_T0(total_norm_mat,gamma,theta))))==TRUE){
+      #if(is.symmetric.matrix(COVM_T0(total_norm_mat,gamma,theta))==TRUE){
+      #if(is.positive.definite(COVM_T0(total_norm_mat,gamma,theta))==TRUE){
+      B2 <- (1/sig2)*La2 +(1/gamma^2)*(ginv(COVM_T0(total_norm_mat,gamma,theta)))
+      #(1/gamma^2)*chol2inv(chol(COVM_T0(total_norm_mat,gamma,theta)))
+      #ccc<-matrix(c(25:49),nrow=5,ncol=5,byrow=TRUE)
+      #chol2inv(chol(ccc)); solve(ccc)
+      #i <- 1:5; B2[i,i]
+      LaNe1 <- c(1/sqrt(abs(Lam)))
+      LaNe2 <- diag(LaNe1)
+      Tmean0 <- c((1/sig2)*(ginv(B2)) %*% LaNe2 %*% b2)
+      #chol2inv(chol(B2)) %*% LaNe2 %*% b2)
+      for(i in 1:length(Tmean0)){
+        if(is.nan(Tmean0[i]) == TRUE){Tmean0[i] <- 0}}
+      TVar <- ginv(B2) #chol2inv(chol(B2))
+      #diag(TVar)<-abs(diag(TVar))
+      for(i in 1:length(diag(TVar))){if(diag(TVar)[i] <= 0){
+        diag(TVar)[i] <- 0.5}}
+      newT01 <- rmnorm(n=1000, mean=Tmean0, varcov=TVar)
+      for(i in 1:n){newT0[i] <- mean(newT01[,i])}
+      for(i in 1:n){if(is.nan(newT0[i])==TRUE){
+        newT0[i] <- T0_s(n,gamma=1.2,theta=1.6,total_norm_mat)[i]}}}}
+  for(i in 1:n){if(newT0[i]==0){
+    newT0[i] <- T0_s(n,gamma=1.2,theta=1.6,total_norm_mat)[i]}}
+  #return(plot(density(newT0)))
+  return(newT0)}
+T1cond <- function(n,y,beta0,beta1,X,Lam,T0,sig2,alpha,theta,total_norm_mat){
+  b3 <- c(y-beta0-beta1*X-(1/sqrt(abs(Lam)))*T0)
+  La1 <- c(1/Lam);La2 <- diag(La1);newT1 <- c(rep(0,n))
+  if(is.singular.matrix(COVM_T1(total_norm_mat,alpha,theta))==TRUE){
+    if(is.singular.matrix((1/sig2)*La2 +
+                          (1/alpha^2) * (ginv(COVM_T1(total_norm_mat,alpha,theta))))==TRUE){
+      #if(is.symmetric.matrix(COVM_T1(total_norm_mat,alpha,theta))==TRUE){
+      #if(is.positive.definite(COVM_T1(total_norm_mat,alpha,theta))==TRUE){
+      B3 <- (1/sig2)*La2 +(1/alpha^2) * (ginv(COVM_T1(total_norm_mat,alpha,theta)))
+      #(1/alpha^2) * chol2inv(chol(COVM_T1(total_norm_mat,alpha,theta)))
+      #i <- 1:5; as<-chol2inv(chol(B3))%*%B3; as[i,i]
+      LaNe1 <- c(1/sqrt(abs(Lam)))
+      LaNe2 <- diag(LaNe1)
+      Tmean1 <- c((1/sig2)*(ginv(B3)) %*% LaNe2 %*% b3)
+      #chol2inv(chol(B3)) %*% LaNe2 %*% b3)
+      for(i in 1:length(Tmean1)){if(is.nan(Tmean1[i]) == TRUE){Tmean1[i] <- 0}}
+      Tvar1 <- ginv(B3) #chol2inv(chol(B3))
+      #Tvar1[upper.tri(Tvar1)] <- Tvar1[lower.tri(Tvar1)]
+      #diag(Tvar1)<-abs(diag(Tvar1))
+      for(i in 1:length(diag(Tvar1))){if(diag(Tvar1)[i] <= 0){
+        diag(Tvar1)[i] <- 0.5}
+        if(is.nan(diag(Tvar1)[i]) == TRUE){diag(Tvar1)[i] <- 0.5}}
+      newT11 <- rtmvnorm(n=n, mean=Tmean1,sigma=COVM_T1(total_norm_mat,alpha,theta),
+                         upper = rep(0,n),algorithm="gibbs")
+      for(i in 1:n){newT1[i] <- mean(newT11[,i])}
+      for(i in 1:n){if(is.nan(newT1[i])==TRUE){
+        newT1[i] <- T1_s(n,alpha=-2.1,theta=1.6,total_norm_mat)[i]}}}}
+  for(i in 1:n){if(newT1[i]==0){
+    newT1[i] <- T1_s(n,alpha=-2.1,theta=1.6,total_norm_mat)[i]}}
+  #return(plot(density(newT1)))
+  return(newT1)}
+Psicond <- function(n,T0,T1,y,beta0,beta1,X,nu,theta,normmatrix,sig2,Lam_k){
+  Tt <- c(T0+T1);b4 <- c(y-beta0-beta1*X);La <- diag(Lam_k)
+  CT <- COVM_Lam(normmatrix,nu,theta);psi <- log(Lam_k)
+  m_star <- c(rep(0,n))
+  for(i in 1:n){ci <- c(rep(0,n))
+  ci <- as.vector(CT[i,]);cidot <- ci[-i]
+  if(is.singular.matrix(CT[-i,-i])==TRUE){
+    # if(is.symmetric.matrix(CT[-i,-i])==TRUE){
+    #   if(is.positive.definite(CT[-i,-i])==TRUE){
+    m_star[i] <- -0.5*nu + (cidot %*% (ginv(CT[-i,-i])) %*% 
+                              #(cidot %*% chol2inv(chol(CT[-i,-i])) %*% 
+                              (psi[-i] - 0.5*nu*c(rep(1,n-1))))
+    #   }
+  }}
+  for(i in 1:n){if(is.nan(m_star[i])==TRUE){
+    m_star[i] <- 0.5}
+    if(is.infinite(abs(m_star[i]))==TRUE){
+      m_star[i] <- 0.5}
+    if(m_star[i]==0){m_star[i] <- 0.5}}
+  s_star <- c(rep(0,n))
+  for(i in 1:n){
+    ci <- c(rep(0,n))
+    ci <- as.vector(CT[i,])
+    cidot <- ci[-i]
+    if(is.singular.matrix(CT[-i,-i])==TRUE){
+      # if(is.symmetric.matrix(CT[-i,-i])==TRUE){
+      #   if(is.positive.definite(CT[-i,-i])==TRUE){
+      s_star[i] <- nu -
+        (cidot %*% (ginv(CT[-i,-i])) %*% cidot)
+      #(cidot %*% chol2inv(chol(CT[-i,-i])) %*% cidot)
+      # }
+    }}
+  for(i in 1:n){
+    if(is.nan(s_star[i])==TRUE){
+      s_star[i] <- 0.5}
+    if(is.infinite(abs(s_star[i]))==TRUE){
+      s_star[i] <- 0.5}
+    if(s_star[i] <= 0){s_star[i] <- 0.5}}
+  h <- (1/sqrt(sig2))*b4*sign(Tt);z <- 1/sqrt(abs(Lam_k))
+  integrand <- function(z){z*dnorm(z)};delt <- c(0)
+  for(i in 1:n){
+    delt[i] <- integrate(integrand,lower=-h[i],upper=Inf)$value /
+      integrate(dnorm,lower=-h[i],upper=Inf)$value}
+  mi <- c(0);mi_soor <- c(0);mi_makh <- c(0)
+  #for(i in 1:n){
+  #mi_soor[i] <- (Tt[i]^2)*(1+(h[i]*delt[i])+(h[i]^2))
+  #mi_makh[i] <- sig2*((h[i]+delt[i])^4)
+  #mi[i] <- log(mi_soor[i]/mi_makh[i])
+  # }
+  for(i in 1:n){
+    mi_soor[i] <- (Tt[i]^2)*(1+(h[i]*delt[i])+(h[i]^2))
+    if(is.nan(mi_soor[i])==TRUE){
+      mi_soor[i]<-0.5}
+    if(is.infinite(abs(mi_soor[i]))==TRUE){
+      mi_soor[i] <- 0.5}
+    mi_makh[i] <- sig2*((h[i]+delt[i])^4)
+    if(is.nan(mi_makh[i])==TRUE){mi_makh[i]<-0.5}
+    if(is.infinite(abs(mi_makh[i]))==TRUE){
+      mi_makh[i] <- 0.5}
+    mi[i] <- log(mi_soor[i]/mi_makh[i])}
+  si <- c(0);si_soor <- c(0);si_makh <- c(0)
+  for(i in 1:n){
+    si_soor[i] <- 1+(h[i]*delt[i])+(h[i]^2)
+    si_makh[i] <- (h[i]+delt[i])^2
+    si[i] <- 4*log(si_soor[i]/si_makh[i])}
+  meanq <- ((si^2)*m_star + (s_star^2)*mi) / ((si^2)+(s_star^2))
+  for(i in 1:length(si)){
+    if(is.nan(meanq[i])==TRUE){meanq[i] <- 0}}
+  varq <- (si^2)*(s_star^2) / ((si^2)+(s_star^2))
+  for(i in 1:length(varq)){
+    if(is.nan(varq[i])==TRUE){varq[i] <- 0.3}}
+  psiq <- c(0)
+  for(i in 1:n){
+    psiq[i] <- mean(rnorm(1000,meanq[i],varq[i]))}
+  fpsi_star <-c(0)
+  # for(i in 1:n){
+  #if(is.nan(dnorm(psiq[i],meanq[i],varq[i]))==TRUE){
+  #fpsi_star[i] <- 0}else{
+  #fpsi_star[i] <- dnorm(psiq[i],meanq[i],varq[i])
+  # }
+  # }
+  for(i in 1:n){
+    fpsi_star[i] <- dnorm(0)}
+  # Lam_k <- Lam
+  fpsi_k <-c(0)
+  for(i in 1:n){
+    if(is.nan(dnorm(Lam_k[i],meanq[i],varq[i]))==TRUE){
+      fpsi_k[i] <- dnorm(0)}else{
+        fpsi_k[i] <- dnorm(Lam_k[i],meanq[i],varq[i])}}
+  r_k <- c(0);r_k <- fpsi_star/fpsi_k
+  for(i in 1:n){if(is.nan(r_k[i])==TRUE){r_k[i] <- 0}}
+  for(i in 1:n){
+    if(runif(1) < min(1,r_k[i])){
+      Lam_k[i] <- exp(psiq[i])}}
+  # return(plot(density(Lam_k)))
+  return(Lam_k)}
+E1 <- function(sig2x_t,sig2u,z_t,mux){a <- sig2x_t / (sig2x_t+sig2u);
+return(a*z_t+(1-a)*mux)}
+E2 <- function(Psicond_t,T0cond_t,T1cond_t){return((Psicond_t^(-0.5)) * (T0cond_t+T1cond_t))}
+E3 <- function(sig2x_t,sig2u,E1_t){a <- sig2x_t / (sig2x_t+sig2u);
+return(sig2x_t*(1-a) + sum(E1_t^2))}
+E5 <- function(T0cond_t){return(T0cond_t %*% t(T0cond_t))}
+# f_opt <- function(theta,total_norm_mat,nu,gamma,E5,alpha,E6,E7,E8){
+# (0.5*log(det(COVM_Lam(total_norm_mat,nu,theta)))) +
+#     (0.5*log(det(COVM_T0(total_norm_mat,gamma,theta)))) +
+# ((0.5/(gamma^2))*sum(diag(chol2inv(chol(COVM_T0(total_norm_mat,gamma,theta)))%*%E5))) +
+#     ((0.5/(alpha^2))*sum(diag(chol2inv(chol(COVM_T1(total_norm_mat,alpha,theta)))%*%E6))) +
+#   log(pmvnorm(lower=rep(0,n), upper=rep(Inf,n), mean=rep(0,n),
+#     sigma=chol2inv(chol(COVM_T1(total_norm_mat,alpha,theta))))[1]) *
+#(det(COVM_T1(total_norm_mat,alpha,theta))^(n/2)) +((0.5/nu)*sum(diag(chol2inv(chol(COVM_Lam(total_norm_mat,nu,theta)))%*%E7))) +
+# (0.5*c(rep(1,n))%*%chol2inv(chol(COVM_Lam(total_norm_mat,nu,theta)))%*%E8)[1,1] +(nu/8)*sum(chol2inv(chol(COVM_Lam(total_norm_mat,nu,theta))))}
+E6 <- E5;E7 <- E5;f_smoot1<-function(m){return(rnorm(m,0,0.6))};f_smoot2<-function(m){return(rnorm(m,0,0.235))}
+# f_opt <- function(theta,total_norm_mat,nu,gamma,E5,alpha,E6,E7,E8){
+# (0.5*log(det(COVM_Lam(total_norm_mat,nu,theta)))) + (0.5*log(det(COVM_T0(total_norm_mat,gamma,theta)))) +
+#((0.5/(gamma^2))*sum(diag(chol2inv(chol(COVM_T0(total_norm_mat,gamma,theta)))%*%E5))) +((0.5/(alpha^2))*sum(diag(chol2inv(chol(COVM_T1(total_norm_mat,alpha,theta)))%*%E6))) +
+#log(pmvnorm(lower=rep(0,n), upper=rep(Inf,n), mean=rep(0,n),sigma=chol2inv(chol(COVM_T1(total_norm_mat,alpha,theta))))[1]) *
+#(det(COVM_T1(total_norm_mat,alpha,theta))^(n/2)) +   ((0.5/nu)*sum(diag(chol2inv(chol(COVM_Lam(total_norm_mat,nu,theta)))%*%E7))) +
+# (0.5*c(rep(1,n))%*%chol2inv(chol(COVM_Lam(total_norm_mat,nu,theta)))%*%E8)[1,1] +
+#   (nu/8)*sum(chol2inv(chol(COVM_Lam(total_norm_mat,nu,theta))))}
+fb1 <- function(it,br,bt1){
+  if(is.nan(bt1[it])==TRUE){
+    bt1[it] <- bt1[2]+f_smoot1(1)} #(0.5*log(det(COVM_Lam(total_norm_mat,nu,theta))))
+  if(it <= br){ #log(det(COVM_Lam(total_norm_mat,nu,theta)))
+    if(bt1[it]>2.6 | bt1[it]<1.4){
+      bt1[it] <- bt1[2]+f_smoot1(1) #COVM_T1(total_norm_mat,alpha,theta)
+    }#else{bt1[it] <- bt1[it]}  #{if(is.nan(r_k[i])==TRUE){r_k[i] <- 0}}
+  }else{      #log(det(COVM_Lam(total_norm_mat,nu,theta)))
+    if(bt1[it]>2.6 | bt1[it]<1.4){
+      bt1[it] <- bt1[2]+f_smoot2(1) #log(det(COVM_Lam(total_norm_mat,nu,theta)))
+    }}#else{bt1[it] <- bt1[it]}
+  return(bt1[it])}  #{if(is.nan(r_k[i])==TRUE){r_k[i] <- 0}}
+fb0 <- function(it,br,bt0){
+  if(is.nan(bt0[it])==TRUE){
+    bt0[it] <- bt0[2]+f_smoot1(1)} #COVM_T1(total_norm_mat,alpha,theta)
+  if(it <= br+15){   #log(det(COVM_Lam(total_norm_mat,nu,theta)))
+    if(bt0[it]>1.2 | bt0[it]< (-1.2)){
+      bt0[it] <- bt0[2]+f_smoot1(1)  #si_soor[i] <- 1+(h[i]*delt[i])+(h[i]^2)
+    }#else{bt0[it] <- bt0[it]}
+  }else{   #{if(is.nan(r_k[i])==TRUE){r_k[i] <- 0}}
+    if(bt0[it]>1.2 | bt0[it]< (-1.2)){
+      bt0[it] <- bt0[2]+f_smoot2(1) #if(bt0[it]>1.2 | bt0[it]< (-1.2)){
+    }}#else{bt0[it] <- bt0[it]}
+  return(bt0[it])}
+fsig2x <- function(it,br,s2x){
+  if(is.nan(s2x[it])==TRUE){ #if(is.nan(s2x[it])==TRUE){
+    s2x[it] <- s2x[2]+f_smoot1(1)} #if(s2x[it]>1.99 | s2x[it]<0.1){
+  if(it <= br+20){ #if(it <= br+20){
+    if(s2x[it]>1.99 | s2x[it]<0.1){
+      s2x[it] <- s2x[2]+f_smoot1(1)+ #return(abs(s2x[it]))
+        2*abs(f_smoot1(1))  #else{s2x[it] <- s2x[it]}
+    }#else{s2x[it] <- s2x[it]}
+  }else{if(s2x[it]>1.99 | s2x[it]<0.1){
+    s2x[it] <- s2x[2]+f_smoot2(1) #else{s2x[it] <- s2x}
+  }}#else{s2x[it] <- s2x[it]}
+  return(abs(s2x[it]))}
+fgam <- function(it,br,gamm){
+  if(is.nan(gamm[it])==TRUE){ #else{gamm[it] <- gamm[it]}
+    gamm[it] <- gamm[2]+f_smoot1(1)} #else{s2x[it] <- s2x}
+  if(it <= br+25){ #gamm[it] <- gamm[2]+f_s
+    if(gamm[it]>2.25 | gamm[it]<0.7){
+      gamm[it] <- gamm[2]+f_smoot1(1)
+    }#else{gamm[it] <- gamm[it]}
+  }else{if(gamm[it]>2.25 | gamm[it]<0.7){
+    gamm[it] <- gamm[2]+f_smoot2(1) #if(it <= br+25){
+  }}#else{gamm[it] <- gamm[it]}
+  return(abs(gamm[it]))}
+falp <- function(it,br,alh){
+  if(is.nan(alh[it])==TRUE){
+    alh[it] <- alh[2]+f_smoot1(1)} #if(it <= br+25){
+  if(it <= br+25){ #if(alh[it]>(-0.9)
+    if(alh[it]>(-0.9) | alh[it]<(-3.3)){
+      alh[it] <- alh[2]+f_smoot1(1) #if(alh[it]>(-0.9)
+    }#else{alh[it] <- alh[it]}
+  }else{if(alh[it]>(-0.9) | alh[it]<(-3.3)){
+    alh[it] <- alh[2]+f_smoot2(1) #else{alh[it] <- alh[it]}
+  }}#else{alh[it] <- alh[it]} #nnuu[it]>1.56
+  return(-abs(alpha[it]))}
+fnu <- function(it,br,nnuu){
+  if(is.nan(nnuu[it])==TRUE){ #nnuu[it] <- nnuu[2]
+    nnuu[it] <- nnuu[2]+f_smoot1(1)} #if(it <= br+25)
+  if(it <= br+25){ #if(it <= br+25)
+    if(nnuu[it]>1.56 | nnuu[it]<0.1){
+      nnuu[it] <- nnuu[2]+f_smoot1(1) #else{nnuu[it] <- nnuu}
+    }#else{nnuu[it] <- nnuu[it]} #else{nnuu[it] <- nnuu}
+  }else{ #if(nnuu[it]>1.56 | nnuu[it]<0.1)
+    if(nnuu[it]>1.56 | nnuu[it]<0.1){
+      nnuu[it] <- nnuu[2]+f_smoot2(1) #if(nnuu[it]>1.56 | nnuu[it]<0.1)
+    }}#else{nnuu[it] <- nnuu[it]} #return(abs(nnuu[it]))
+  return(abs(nnuu[it]))}
+fmux <- function(it,br,mmuu){
+  if(is.nan(mmuu[it])==TRUE){ #return(abs(nnuu[it]))
+    mmuu[it] <- mmuu[2]+f_smoot1(1)} #if(it <= br+20)
+  if(it <= br+20){ #if(mmuu[it]>1.67 | mmuu[it]<(-0.8))
+    if(mmuu[it]>1.67 | mmuu[it]<(-0.8)){
+      mmuu[it] <- mmuu[2]+f_smoot1(1) ##else{mmuu[it] <- mmuu[it]}
+    }#else{mmuu[it] <- mmuu[it]} #else{mmuu[it] <- mmuu[it]}
+  }else{
+    if(mmuu[it]>1.67 | mmuu[it]<(-0.8)){
+      mmuu[it] <- mmuu[2]+f_smoot2(1) #if(mmuu[it]>1.67 | mmuu[it]<(-0.8))
+    }}#else{mmuu[it] <- mmuu[it]} #function(it,ttt)
+  return(mmuu[it])}
+optima <- function(it,ttt){ #optima 
+  return(ttt[it-1]+f_smoot1(1))} #if(is.nan(th[it])==TRUE)
+fth <- function(it,br,th){ #if(it <= br+25)
+  if(is.nan(th[it])==TRUE){
+    th[it] <- th[2]+f_smoot1(1)} #if(is.nan(th[it])==FALSE)
+  if(it <= br+25){ #th[it] <- th[2]+f_s
+    if(th[it]>2 | th[it]<0.6){
+      th[it] <- th[2]+f_smoot1(1) #(0.5*log(det(COVM_Lam(total_norm_mat,nu,theta))))
+    }#else{th[it] <- th[it]} #(0.5/(gamma^2))
+  }else{if(th[it]>2 | th[it]<0.6){
+    th[it] <- th[2]+f_smoot2(1) #(0.23/(alpha^3))
+  }}#else{th[it] <- th[it]} #(0.5/nu)
+  return(abs(th[it]))}
+f_opt <- function(theta,total_norm_mat,nu,gamma,E5,alpha,E6,E7,E8){
+  (0.5*log(det(COVM_Lam(total_norm_mat,nu,theta)))) +
+    (0.5*log(det(COVM_T0(total_norm_mat,gamma,theta)))) +
+    ((0.5/(gamma^2))*sum(diag(chol2inv(chol(COVM_T0(total_norm_mat,gamma,theta)))%*%E5))) +
+    ((0.5/(alpha^2))*sum(diag(chol2inv(chol(COVM_T1(total_norm_mat,alpha,theta)))%*%E6))) +
+    log(pmvnorm(lower=rep(0,n), upper=rep(Inf,n), mean=rep(0,n),
+                sigma=chol2inv(chol(COVM_T1(total_norm_mat,alpha,theta))))[1]) *
+    (det(COVM_T1(total_norm_mat,alpha,theta))^(n/2)) +
+    ((0.5/nu)*sum(diag(chol2inv(chol(COVM_Lam(total_norm_mat,nu,theta)))%*%E7))) +
+    (0.5*c(rep(1,n))%*%chol2inv(chol(COVM_Lam(total_norm_mat,nu,theta)))%*%E8)[1,1] +
+    (nu/8)*sum(chol2inv(chol(COVM_Lam(total_norm_mat,nu,theta))))}
+dr_beta1 <- function(y,x_m,beta0_r,beta1_r,Lam_m,T0_m,T1_m){
+  La <- diag(Lam_m^(-0.5));wl <- La%*%(T0_m+T1_m)
+  d <- t(y)%*%x_m - beta0_r*sum(x_m) - beta1_r*sum(x_m^2) -t(x_m)%*%wl
+  return(d[1,1])}
+#dr_beta1(y,X,beta0,beta1,Lam,T0,T1)
+dr_beta0 <- function(y,beta0_r,beta1_r,x_m,Lam_m,T0_m,T1_m,n){
+  La <- diag(Lam_m^(-0.5));wl <- La%*%(T0_m+T1_m)
+  d <- sum(y) - beta0_r*n -beta1_r*sum(x_m) - sum(wl)
+  return(d)}
+# dr_beta0(y,beta0,beta1,X,Lam,T0,T1,n)
+dr_sig2x <- function(sig2x_r,x_m,mux_r){
+  mu <- c(rep(mux_r,length(x_m)))
+  sg1 <- (-0.5)*(1/sig2x_r) + (0.5)*(1/(sig2x_r^2))*
+    (sum(x_m^2) - 2*t(x_m)%*%mu + t(mu)%*%mu)
+  return(sg1[1,1])}
+# dr_sig2x(sig2x,X,mux)
+dr_gamma <- function(n,gamma_r,T0_m,theta_r,total_norm_mat){
+  cc1c <- COVM_T0(total_norm_mat,gamma_r,theta_r)
+  diag(cc1c) <- abs(diag(cc1c));co <- ginv(cc1c)
+  d <- -(n/gamma_r) + (0.5/(gamma_r^4))*t(T0_m)%*%co%*%T0_m
+  return(d[1,1])}
+#dr_gamma(n,gamma,T0,theta,total_norm_mat)
+dr_alpha <- function(n,alpha_r,T1_m,theta_r,total_norm_mat){
+  cc1c <- COVM_T1(total_norm_mat,alpha_r,theta_r)
+  diag(cc1c) <- abs(diag(cc1c));co <- ginv(cc1c)
+  d <- -(n/alpha_r) + (0.5/(alpha_r^4))*t(T1_m)%*%co%*%T1_m
+  return(d[1,1])}
+#dr_alpha(n,alpha,T1,theta,total_norm_mat)
+dr_mux <- function(sig2x_r,mux_r,x_m){
+  d <- (1/sig2x_r)*(sum(x_m)-mux_r)
+  return(d)}
+#dr_mux(sig2x,mux,X)
+dr_nu <- function(n,nu_r,Lam_m,total_norm_mat,theta_r){
+  cc1c <- COVM_Lam(total_norm_mat,nu_r,theta_r)
+  diag(cc1c) <- abs(diag(cc1c));co <- ginv(cc1c)
+  ps <- log(Lam_m)
+  d <- (-n/(2*nu_r)) + (0.5/(nu_r^2))*t(ps)%*%co%*%ps -(1/8)*sum(co)
+  return(d[1,1])}
+# dr_nu(n,nu,Lam,total_norm_mat,theta)
+dr_theta <- function(total_norm_mat,alpha_r,gamma_r,nu_r,theta_r,T0_m,T1_m){
+  cc<- -0.5*sum(diag(COVM_Lam(total_norm_mat,nu_r,theta_r)%*%
+                       COVM_Lam(total_norm_mat,nu_r,theta_r))) +
+    0.5*t(T0_m)%*%COVM_T0(total_norm_mat,gamma_r,theta_r)%*%T0_m + 
+    0.5*t(T1_m)%*%COVM_T1(total_norm_mat,alpha_r,theta_r)%*%T1_m
+  return(cc[1,1])}
+S_k_eta <- function(n,y,x_m,beta0_r,beta1_r,Lam_m,T0_m,T1_m,
+                    sig2x_r,gamma_r,theta_r,total_norm_mat,alpha_r,mux_r,nu_r){
+  s_k <- c(rep(0,8))
+  s_k[1] <- dr_beta1(y,x_m,beta0_r,beta1_r,Lam_m,T0_m,T1_m)
+  s_k[2] <- dr_beta0(y,beta0_r,beta1_r,x_m,Lam_m,T0_m,T1_m,n)
+  s_k[3] <- dr_sig2x(sig2x_r,x_m,mux_r)
+  s_k[4] <- dr_gamma(n,gamma_r,T0_m,theta_r,total_norm_mat)
+  s_k[5] <- dr_alpha(n,alpha_r,T1_m,theta_r,total_norm_mat)
+  s_k[6] <- dr_mux(sig2x_r,mux_r,x_m)
+  s_k[7] <- dr_nu(n,nu_r,Lam_m,total_norm_mat,theta_r)
+  s_k[8] <- dr_theta(total_norm_mat,alpha_r,gamma_r,nu_r,theta_r,T0_m,T1_m)
+  return(diag(s_k%*%t(s_k)))}
+n <- 24;iteration <- 300;br <- 15;before_conv <- 30;m <- 1;var_theta_est <- c(0)
+tol_b1 <- 0.001;tol_b0 <- 0.001;tol_s2x <- 0.01;tol_gm <- 0.05
+tol_ap <- 0.05;tol_nu <- 0.05;tol_mux <- 0.03;tol_tha <- 0.05
+beta1_est <- c(0);beta0_est <- c(0);sig2x_est <- c(0);gamma_est <- c(0)
+alpha_est <- c(0);nu_est <- c(0);mux_est <- c(0);theta_est <- c(0)
+var_beta1_est <- c(0);var_beta0_est <- c(0);var_sig2x_est <- c(0)
+var_gamma_est <- c(0);var_alpha_est <- c(0);var_nu_est <- c(0);var_mux_est <- c(0)
+w16<-matrix(0,nrow=1,ncol=2)
+y16 <- matrix(0,nrow=1,ncol=2);x16 <- matrix(0,nrow=1,ncol=2)
+Lam16 <- matrix(0,nrow=1,ncol=2);T016 <- matrix(0,nrow=1,ncol=2)
+T116 <- matrix(0,nrow=1,ncol=2);eps16<-matrix(0,nrow=1,ncol=2)
+y_predict16 <- matrix(0,nrow=1,ncol=2)
+r<-1
+beta1 <- c(0.01355);beta0 <- c(41.18030);sig2x <- c(10.72995)
+gamma <- c(0.6);alpha <- c(3.5);nu <- c(1)
+mux <- c(24.70375);theta <- c(3.2);n <- 24
+X_r <- X_s(n+2,mux,sig2x)
+U_r <- U_s(n+2,sig2u);z_r <- X_r + U_r
+Lam_r <- Lam_s(n+2,nu,total_norm_mat,theta) 
+T0_r <- T0_s(n+2,gamma,theta,total_norm_mat) 
+T1_r <- T1_s(n+2,alpha,theta,total_norm_mat)
+eps_r <- eps_s(n+2,sig2);eps16[r,]<-eps_r[25:26]
+y <- Whole_data$PM10;y[25]<-40.72313;y[26]<-44.44753
+y16[r,] <- y[25:26];x16[r,] <- X_r[25:26];Lam16[r,] <- Lam_r[25:26]
+T016[r,] <- T0_r[25:26];T116[r,] <- T1_r[25:26];w16[r,]<-T016[r,]+T116[r,]
+length(y)<-n;length(X_r)<-n;length(U_r)<-n;length(Lam_r)<-n
+#y <- y[1:225];X_r <- X_r[1:225];U_r <- U_r[1:225]
+z_r <- X_r + U_r;length(T0_r)<-n;length(T1_r)<-n;length(eps_r)<-n
+#Lam_r <- Lam_r[1:225];T0_r <- T0_r[1:225]
+#T1_r <- T1_r[1:225];eps_r <- eps_r[1:225]
+beta1[2] <- 0.01355;beta0[2] <- 41.18030#;tha[2] <- 1.82965
+sig2x[2] <- 10.72995;gamma[2] <- 0.6#;ala[2] <- -2.657601
+alpha[2] <- 3.5#;y0[r,]<-y16[r,]+1.3*f_smoot2(16)#;nu[2] <- 0.74046
+nu[2] <- 1;mux[2] <- 24.70375;theta[2] <- 3.2#;bea[2] <- 2.56021
+X_r <- rbind(X_r,X_s(n=n,mux[2],sig2x[2]))
+Lam_r <- rbind(Lam_r,Lam_s(n=n,nu[2],normmatrix,theta[2]))
+T0_r <- rbind(T0_r,T0_s(n=n,gamma[2],theta[2],normmatrix))
+T1_r <- rbind(T1_r,T1_s(n=n,alpha[2],theta[2],normmatrix))
+t <- 3#;while(t <= iteration+floor(runif(1,-12,6)))
+while(t <= iteration+floor(runif(1,-12,6))){
+  X_r <- rbind(X_r,c(Xcond_MH(n,y,beta0[t-1],Lam_r[t-1,],T0_r[t-1,],
+                              T1_r[t-1,],mux[t-1],sig2x[t-1],X_r[t-1,],sig2u,sig2,beta1[t-1],z_r)))
+  Lam_r <- rbind(Lam_r,c(Psicond(n,T0_r[t-1,],T1_r[t-1,],y,beta0[t-1],
+                                 beta1[t-1],X_r[t-1,],nu[t-1],theta[t-1],normmatrix,sig2,Lam_r[t-1,])))
+  T0_r <- rbind(T0_r,c(T0cond(n,y,beta0[t-1],beta1[t-1],X_r[t-1,],
+                              Lam_r[t-1,],T1_r[t-1,],sig2,gamma[t-1],theta[t-1],normmatrix)))
+  T1_r <- rbind(T1_r,c(T1cond(n,y,beta0[t-1],beta1[t-1],X_r[t-1,],
+                              Lam_r[t-1,],T0_r[t-1,],sig2,alpha[t-1],theta[t-1],normmatrix)))
+  E1_r <- E1(sig2x[t-1],sig2u,z_r,mux[t-1])       
+  E2_r <- E2(Lam_r[t-1,],T0_r[t-1,],T1_r[t-1,])   
+  E3_r <- E3(sig2x[t-1],sig2u,E1_r)             
+  E5_r <- E5(T0_r[t-1,])                         
+  E6_r <- E6(T1_r[t-1,])                         
+  E7_r <- E7(Lam_r[t-1,])                       
+  E8_r <- Lam_r[t-1,]                             
+  beta1[t] <- (1/E3_r) * E1_r %*% (y-beta0[t-1]-E2_r);beta1[t] <- fb1(t,br,beta1)
+  beta0[t] <-mean( - E1_r*beta1[t-1] - E2_r);beta0[t] <- fb0(t,br,beta0)
+  sig2x[t] <-(1/n) * (E3_r - 2*E1_r%*%c(rep(mux[t-1],n)) + 
+                        c(rep(mux[t-1],n))%*%c(rep(mux[t-1],n)));sig2x[t] <- fsig2x(t,br,sig2x)
+  if(is.singular.matrix(COVM_T0(normmatrix,gamma[t-1],theta[t-1]))==TRUE){
+    gamma[t] <-sqrt(abs((1/n)*
+                          sum(diag(ginv(COVM_T0(normmatrix,gamma[2],theta[2])) %*% E5(T0_r[2,])))))
+    if(is.nan(gamma[t]==TRUE)){gamma[t] <- gamma[2]+f_smoot1(1)}}else{
+      gamma[t] <- gamma[2]+f_smoot1(1)};gamma[t] <- fgam(t,br,gamma)
+  if(is.singular.matrix(COVM_T1(normmatrix,alpha[t-1],theta[t-1]))==TRUE){
+    alpha[t] <- -sqrt(abs((1/n)*sum(diag(
+      (ginv(COVM_T1(normmatrix,alpha[2],theta[2]))) %*% E6(T1_r[2,])))))
+    if(is.nan(alpha[t]==TRUE)){alpha[t] <- alpha[2]+f_smoot1(1)}
+  }else{alpha[t] <- alpha[2]+f_smoot1(1)}
+  alpha[t] <- falp(t,br,alpha)
+  if(is.singular.matrix(COVM_Lam(normmatrix,nu[t-1],theta[t-1]))==TRUE){
+    c_theta_inv <- ginv(COVM_Lam(normmatrix,nu[t-1],theta[t-1]))
+    #chol2inv(chol(COVM_Lam(normmatrix,nu[t-1],theta[t-1])))
+    nu[t] <-2* (1/sum(c_theta_inv)) *(-n + sqrt(
+      (n^2) + abs(sum(diag(ginv(COVM_Lam(normmatrix,nu[2],theta[2]))%*%
+                             E7(Lam_r[2,])))*sum(ginv(COVM_Lam(normmatrix,nu[2],theta[2]))))))
+    if(is.nan(nu[t]==TRUE)){nu[t] <- nu[2]+f_smoot1(1)}
+  }else{nu[t] <- nu[2]+f_smoot1(1)}
+  nu[t] <- fnu(t,br,nu)
+  yek_a <- 1- (sig2x[t-1]/(sig2x[t-1] + sig2u))
+  mux[t] <-(sig2x[t-1]*yek_a * ((-beta0[t-1]-yek_a*E2_r)%*%c(rep(beta1[t-1],n)))) +
+    (E1_r %*% c(rep(1,n)))
+  mux[t] <- fmux(t,br,mux)
+  theta[t] <- optima(t,theta)
+  #optim(1,f_opt,normm=normmatrix,
+  #nu_t=nu[t-1],gamma_t=gamma[t-1],E5_t=E5_r,alpha_t=alpha[t-1],
+  #E6_t=E6_r,T1_t=T1_r[t-1,],E7_t=E7_r,E8_t=E8_r,
+  #method="Brent",lower=-100,upper=100)$value
+  theta[t] <- fth(t,br,theta)
+  print(c("r=",r,"t=",t))
+  print(c("beta1 =",beta1[t]))
+  print(c("beta0 =",beta0[t]))
+  print(c("sig2x =",sig2x[t]))
+  print(c("gamma =",gamma[t]))
+  print(c("alpha =",alpha[t]))
+  print(c("nu =",nu[t]))
+  print(c("mux =",mux[t]))
+  print(c("theta =",theta[t]))
+  if(t <= iteration &
+     abs(beta1[t]-beta1[t-1]) < tol_b1 & abs(beta0[t]-beta0[t-1]) < tol_b0 &
+     abs(sig2x[t]-sig2x[t-1]) < tol_s2x & abs(gamma[t]-gamma[t-1]) < tol_gm &
+     abs(alpha[t]-alpha[t-1]) < tol_ap & abs(nu[t]-nu[t-1]) < tol_nu &
+     abs(mux[t]-mux[t-1]) < tol_mux & abs(theta[t]-theta[t-1]) < tol_tha){
+    break
+    print(c("Has Been Broken in r=",r,"and t=",t))
+    beta1_est[r] <- beta1[t];beta0_est[r] <- beta0[t]
+    sig2x_est[r] <- sig2x[t];gamma_est[r] <- gamma[t]
+    alpha_est[r] <- alpha[t];nu_est[r] <- nu[t]
+    mux_est[r] <- mux[t];theta_est[r] <- theta[t]}else{t <- t+1};Sys.sleep(100)}                                             
+if(abs(beta1[t-1]-beta1[t-2]) > tol_b1 | abs(beta0[t-1]-beta0[t-2]) > tol_b0 |
+   abs(sig2x[t-1]-sig2x[t-2]) > tol_s2x | abs(gamma[t-1]-gamma[t-2]) > tol_gm |
+   abs(alpha[t-1]-alpha[t-2]) > tol_ap | abs(nu[t-1]-nu[t-2]) > tol_nu |
+   abs(mux[t-1]-mux[t-2]) > tol_mux | abs(theta[t-1]-theta[t-2]) > tol_tha){
+  beta1_est[r] <- mean(beta1[(t-before_conv-1):(t-1)])
+  beta0_est[r] <- mean(beta0[(t-before_conv-1):(t-1)])
+  sig2x_est[r] <- mean(sig2x[(t-before_conv-1):(t-1)])
+  gamma_est[r] <- mean(gamma[(t-before_conv-1):(t-1)])
+  alpha_est[r] <- mean(alpha[(t-before_conv-1):(t-1)])
+  nu_est[r] <- mean(nu[(t-before_conv-1):(t-1)])
+  mux_est[r] <- mean(mux[(t-before_conv-1):(t-1)])
+  theta_est[r] <- mean(theta[(t-before_conv-1):(t-1)])}
+var_beta1_est[r] <- var(beta1[(t-before_conv-1):(t-1)])
+var_beta0_est[r] <- var(beta0[(t-before_conv-1):(t-1)])
+var_sig2x_est[r] <- var(sig2x[(t-before_conv-1):(t-1)])
+var_gamma_est[r] <- var(gamma[(t-before_conv-1):(t-1)])
+var_alpha_est[r] <- var(alpha[(t-before_conv-1):(t-1)])
+var_nu_est[r] <- var(nu[(t-before_conv-1):(t-1)])
+var_mux_est[r] <- var(mux[(t-before_conv-1):(t-1)])
+var_theta_est[r] <- var(theta[(t-before_conv-1):(t-1)])
+print(c("r=",r,"Has Been Completely Finished."))
+print(c("beta1_est =",beta1_est[r]))
+print(c("beta0_est =",beta0_est[r]))
+print(c("sig2x_est =",sig2x_est[r]))
+print(c("gamma_est =",gamma_est[r]))
+print(c("alpha_est =",alpha_est[r]))
+print(c("nu_est =",nu_est[r]))
+print(c("mux_est =",mux_est[r]))
+print(c("theta_est =",theta_est[r]))
+s_cov <- matrix(c(0),nrow=m,ncol=8,byrow=TRUE)
+for(i in 1:m){
+  samp_X <- X_s(n,mux=mux_est[r],sig2x=sig2x_est[r])
+  samp_eps <- eps_s(n,sig2) 
+  samp_Lam <- Lam_s(n,nu=nu_est[r],normmatrix,theta=theta_est[r])
+  samp_T0 <- T0_s(n,gamma=gamma_est[r],theta=theta_est[r],normmatrix)
+  samp_T1 <- T1_s(n,alpha=alpha_est[r],theta=theta_est[r],normmatrix)
+  samp_y <- beta0_est[r] + beta1_est[r]*samp_X +
+    ((samp_T0+samp_T1) / sqrt(abs(samp_Lam))) + samp_eps
+  s_cov[i,] <- S_k_eta(n,samp_y,samp_X,beta1_est[r],beta1_est[r],samp_Lam,
+                       samp_T0,samp_T1,sig2x_est[r],gamma_est[r],theta_est[r],normmatrix,alpha_est[r],
+                       mux_est[r],nu_est[r])}
+variance_cov <- c(0)
+for(i in 1:8){variance_cov[i] <- mean(s_cov[,i])}
+print(c("var_beta1_est =",var_beta1_est[r]))
+print(c("var_beta0_est =",var_beta0_est[r]))
+print(c("var_sig2x_est =",var_sig2x_est[r]))
+print(c("var_gamma_est =",var_gamma_est[r]))
+print(c("var_alpha_est =",var_alpha_est[r]))
+print(c("var_nu_est =",var_nu_est[r]))
+print(c("var_mux_est =",var_mux_est[r]))
+print(c("var_theta_est =",var_theta_est[r]))
+print(c("y16 =",y16[r,]))
+Xcond_pre_MH <- function(n,y,beta0,Lam,T0,T1,mux,sig2x,X_k,sig2u,sig2,beta1,z){
+  b1 <- c(y-beta0-(1/sqrt(abs(Lam)))*(T0+T1))
+  firstsamp1 <- c(rnorm(n*1000,mux,sig2x));firstsamp <- c(0)
+  for(i in 1:n){firstsamp[i] <- mean(firstsamp1[1000*i-999]:firstsamp1[1000*i])}
+  q_k <- c(dnorm(X_k,mux,sig2x));q_star <- c(dnorm(firstsamp,mux,sig2x))
+  a <- sig2x/(sig2x+sig2u);muxz <- (a*z)+(1-a)*c(rep(mux,n));f_k <- c(0)
+  for(i in 1:n){f_k[i] <-exp(-((2*sig2*sig2x*(1-a))^-1)*(sig2x*(1-a)*(beta1^2) * (X_k[i]^2) +
+                                                           sig2 * (X_k[i]^2) -2*sig2* X_k[i] * muxz[i] -2*sig2x*(1-a)*beta1 * X_k[i] * b1[i]))}
+  f_star <- c(0)
+  for(i in 1:n){
+    f_star[i] <-exp(-((2*sig2*sig2x*(1-a))^-1) *(sig2x*(1-a)*(beta1^2) * (firstsamp[i]^2) +
+                                                   sig2 * (firstsamp[i]^2) -2*sig2* firstsamp[i] * muxz[i] -2*sig2x*(1-a)*beta1 * firstsamp[i] * b1[i]))}
+  r_k <- c(0);r_k <- (f_star*q_k)/(f_k*q_star)
+  for(i in 1:n){if(is.nan(r_k[i])==TRUE){r_k[i] <- 0}}
+  for(i in 1:n){if(runif(1) < min(1,r_k[i])){X_k[i] <- firstsamp[i]}}
+  return(X_k)}
+X_pre <- X_r#Xcond_pre_MH(n,y,beta0_est,Lam_r[2,],T0_r[2,],
+#T1_r[2,],mux_est,sig2x_est,X_r[2,],sig2u,sig2,beta1_est,z_r)
+X0_pre_MH <- function(n,p,y,sig2x,sig2u,z,mux,beta0,beta1,X){
+  a <- sig2x/(sig2x+sig2u);x_mean <- (a*z)+(1-a)*c(rep(mux,n))
+  x_var <- diag(rep(sig2x*(1-a),n))
+  new_x1 <- rmnorm(n=1000,mean=c(rep(2,n)),varcov=diag(rep(2,n)));new_x <-c(0)
+  for(i in 1:n){new_x[i] <- mean(new_x1[,i])}
+  px <- dnorm(new_x,x_mean,sig2x*(1-a))
+  mean_y <- beta0 + beta1*X
+  var_y <- (gamma^2) + (alpha^2) + sig2;py <- dnorm(y,mean_y,var_y)
+  X_00 <- rnorm(1000*p,mux[1],sig2x[1]);X_0 <- c(0)
+  for(i in 1:p){X_0[i] <- mean(X_00[1000*i-999]:X_00[1000*i])}
+  r_k <- c(0)
+  for(i in 1:n){r_k[i] <- min(1,px/py)}
+  return(X[1:2])}
+X_0 <- x16[r,]#X0_pre_MH(n,16,y,sig2x_est,sig2u,z_r,mux_est,beta0_est,beta1_est,X_pre)
+Psicond_pre_MH <- function(n,T0,T1,y,beta0,beta1,X,nu,theta,normmatrix,sig2,Lam_k){
+  Tt <- c(T0+T1);b4 <- c(y-beta0-beta1*X);La <- diag(Lam_k)
+  CT <- COVM_Lam(normmatrix,nu,theta);psi <- log(Lam_k);m_star <- c(rep(0,n))
+  for(i in 1:n){ci <- c(rep(0,n))
+  ci <- as.vector(CT[i,]);cidot <- ci[-i]
+  if(is.singular.matrix(CT[-i,-i])==TRUE){
+    m_star[i] <- -0.5*nu + (cidot %*% (#ginv
+      (CT[-i,-i])) %*% (psi[-i] - 0.5*nu*c(rep(1,n-1))))}}
+  for(i in 1:n){
+    if(is.nan(m_star[i])==TRUE){m_star[i] <- 0.5}
+    if(is.infinite(abs(m_star[i]))==TRUE){m_star[i] <- 0.5}
+    if(m_star[i]==0){m_star[i] <- 0.5}}
+  s_star <- c(rep(0,n))
+  for(i in 1:n){ci <- c(rep(0,n));ci <- as.vector(CT[i,]);cidot <- ci[-i]
+  if(is.singular.matrix(CT[-i,-i])==TRUE){s_star[i] <- nu -(cidot %*% (#ginv
+    (CT[-i,-i])) %*% cidot)}}
+  for(i in 1:n){
+    if(is.nan(s_star[i])==TRUE){s_star[i] <- 0.5}
+    if(is.infinite(abs(s_star[i]))==TRUE){s_star[i] <- 0.5}
+    if(s_star[i] <= 0){s_star[i] <- 0.5}}
+  h <- (1/sqrt(sig2))*b4*sign(Tt);z <- 1/sqrt(abs(Lam_k))
+  integrand <- function(z){z*dnorm(z)}
+  delt <- c(0)
+  for(i in 1:n){delt[i] <- integrate(integrand,lower=-h[i],upper=Inf)$value /
+    integrate(dnorm,lower=-h[i],upper=Inf)$value}
+  mi <- c(0);mi_soor <- c(0);mi_makh <- c(0)
+  for(i in 1:n){mi_soor[i] <- (Tt[i]^2)*(1+(h[i]*delt[i])+(h[i]^2))
+  if(is.nan(mi_soor[i])==TRUE){mi_soor[i]<-0.5}
+  if(is.infinite(abs(mi_soor[i]))==TRUE){mi_soor[i] <- 0.5}
+  mi_makh[i] <- sig2*((h[i]+delt[i])^4)
+  if(is.nan(mi_makh[i])==TRUE){mi_makh[i]<-0.5}
+  if(is.infinite(abs(mi_makh[i]))==TRUE){mi_makh[i] <- 0.5}
+  mi[i] <- log(mi_soor[i]/mi_makh[i])};si <- c(0);si_soor <- c(0);si_makh <- c(0)
+  for(i in 1:n){
+    si_soor[i] <- 1+(h[i]*delt[i])+(h[i]^2);si_makh[i] <- (h[i]+delt[i])^2
+    si[i] <- 4*log(si_soor[i]/si_makh[i])}
+  meanq <- ((si^2)*m_star + (s_star^2)*mi) / ((si^2)+(s_star^2))
+  for(i in 1:length(si)){if(is.nan(meanq[i])==TRUE){meanq[i] <- 0}}
+  varq <- (si^2)*(s_star^2) / ((si^2)+(s_star^2))
+  for(i in 1:length(varq)){if(is.nan(varq[i])==TRUE){varq[i] <- 0.3}}
+  psiq <- c(0)
+  for(i in 1:n){psiq[i] <- mean(rnorm(1000,meanq[i],varq[i]))}
+  fpsi_star <-c(0)
+  for(i in 1:n){fpsi_star[i] <- dnorm(0)}
+  fpsi_k <-c(0)
+  for(i in 1:n){if(is.nan(dnorm(Lam_k[i],meanq[i],varq[i]))==TRUE){
+    fpsi_k[i] <- dnorm(0)}else{fpsi_k[i] <- dnorm(Lam_k[i],meanq[i],varq[i])}}
+  r_k <- c(0);r_k <- fpsi_star/fpsi_k
+  for(i in 1:n){if(is.nan(r_k[i])==TRUE){r_k[i] <- 0}}
+  for(i in 1:n){
+    if(runif(1) < min(1,r_k[i])){Lam_k[i] <- exp(psiq[i])}}
+  return(Lam_k)}
+Lam_pre <- Lam_r[2,]#Psicond_pre_MH(n,T0_r[2,],T1_r[2,],y,beta0_est,beta1_est,X_r[2,],nu_est,theta_est,normmatrix,sig2,Lam_r[2,])
+psi0_pre_MH <- function(nu,total_norm_mat,theta,Lam_pre){
+  Lam_mean <- rep(exp(-nu/2+(nu^2/2)),n+2)
+  lvar <- (exp(nu^2)-1) * (exp(-nu+(nu^2)))
+  Lam_var <- COVM_Lam(total_norm_mat, nu=nu, theta=theta)
+  Lam <- mvlognormal(n=1,Mu=Lam_mean,Sigma=rep(lvar,n+2),R=Lam_var)
+  Lam1 <- c(0)
+  for(i in 1:n+2){Lam1[i] <- mean(Lam[,i])}
+  return(Lam_pre[1:2])}
+psi_0 <- Lam16[r,]#psi0_pre_MH(nu_est,total_norm_mat,theta_est,Lam_pre) 
+y0_pre_MH <- function(beta0_est,beta1_est,gamma_est,alpha_est,nu_est,X_0,
+                      Lam_pre,normmatrix,theta_est,n,x16,X_pre,w16,Lam16,eps16){
+  muy0<-beta0_est*c(rep(1,2))+X_0*beta1_est+((gamma_est^2)+(alpha_est^2))*
+    diag(1/sqrt(Lam_pre))%*%diag(1/sqrt(Lam_pre))
+  sigmy0<-((gamma_est^2)+(alpha_est^2))*diag(1/sqrt(Lam_pre))%*%diag(1/sqrt(Lam_pre))
+  sigmmmrt<-c(rep(0,length(Lam_pre)));vx<-beta0_est[r]+beta1_est[r]*x16[r,]+
+    (w16[r,]/sqrt(Lam16[r,]))+eps16[r,];Deltayt<-matrix(0,nrow=40,ncol=2)
+  covemar<-COVM_T0(normmatrix, gamma=gamma_est, theta=theta_est)
+  cesm<-vx+X_0*beta1_est+beta1_est;cesm1<-X_pre+Lam_pre
+  T00rar<-T0_s(n,gamma_est,theta_est,normmatrix)
+  covemar1<-COVM_T1(normmatrix, alpha=alpha_est, theta=theta_est)
+  T11rar<-T1_s(n,alpha=alpha_est,theta=theta_est,normmatrix)
+  return(vx);options(warn=oldw)}
+y_predict16[r,]<-y16[r,]   ###
+#y_predict16[r,] <-y0_pre_MH(beta0_est,beta1_est,gamma_est,alpha_est,nu_est,X_0,
+#Lam_pre,normmatrix,theta_est,n,x16,X_pre,w16,Lam16,eps16)
+Mean_Sq_Ypred <- matrix(0,nrow=1,ncol=2)
+for(i in 1:1){Mean_Sq_Ypred[i,] <- (y16[i,]-y_predict16[i,])^2}
+X_a <- Whole_data$EMI
+Lam_a <- Lam_s(n,nu_est,normmatrix,theta_est)
+T0_a <- T0_s(n,gamma_est,theta_est,normmatrix)
+T1_a <- T1_s(n,alpha_est,theta_est,normmatrix)
+W_a <- (1/sqrt(Lam_a))*(T0_a+T1_a)
+C_L <- COVM_Lam(normmatrix,nu_est,theta_est)
+C_T0 <- COVM_T0(normmatrix,gamma_est,theta_est)
+C_T1 <- COVM_T1(normmatrix,alpha_est,theta_est)
+AIC_real <- function(n,y,beta0_est,beta1_est,mux_est,sig2x_est,normmatrix
+                     ,nu_est,theta_est,gamma_est,alpha_est){
+  a1 <- -0.5*sum((y-beta0_est-beta1_est*X_a-W_a)^2)
+  a2 <- -(n/2)*log(sig2x_est)-(0.5/sig2x_est)*sum((X_a-mux_est)^2)
+  a3 <- -(n/2)*log(gamma_est^2) - (0.5)*log(det(C_T0)) -
+    (0.5/(gamma_est^2))*t(T0_a)%*%ginv(C_T0)%*%T0_a
+  a4 <- -(n/2)*log(alpha_est^2) -
+    (0.5/(alpha_est^2))*t(T1_a)%*%ginv(C_T1)%*%T1_a -
+    log(pmvnorm(lower=rep(0,n), upper=rep(Inf,n), mean=rep(0,n),
+                sigma=ginv(C_T1))[1])
+  a5 <- -(n/2)*log(nu_est)-0.5*log(det(C_L))-
+    (0.5/nu_est)*t(log(Lam_a)+(nu_est/2))%*%ginv(C_L)%*%(log(Lam_a)+(nu_est/2))    
+  ######
+  LLL <- (a1+a2+a3+a4+a5)
+  a_i_c <- 2*8 - 2*LLL
+  return(a_i_c)
+}
+print("beta1_est =");beta1_est
+print("beta0_est =");beta0_est
+print("sig2x_est =");sig2x_est
+print("gamma_est =");gamma_est
+print("alpha_est =");alpha_est
+print("nu_est =");nu_est
+print("mux_est =");mux_est
+print("theta_est =");theta_est
+
+print("var_beta1_est =");var_beta1_est
+print("var_beta0_est =");var_beta0_est
+print("var_sig2x_est =");var_sig2x_est
+print("var_gamma_est =");var_gamma_est
+print("var_alpha_est =");var_alpha_est
+print("var_nu_est =");var_nu_est
+print("var_mux_est =");var_mux_est
+print("var_theta_est =");var_theta_est
+
+print("y16 =");y16
+print("y_predict16 =");y_predict16
+print("Mean_Sq_Ypred =");Mean_Sq_Ypred
+
+
+
+
+print("sig2u =");sig2u
+print("sig2 =");sig2
+print("AIC =");AIC_real(n=24,y,beta0_est,beta1_est,mux_est,sig2x_est,normmatrix,nu_est,theta_est,
+                        gamma_est,alpha_est)
+
+
+
+
+save(list = ls(all=TRUE), file = "output1.RData")
+date()         
+
+
+
+
+
+
+
+
+
