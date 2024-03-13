@@ -1,0 +1,6 @@
+
+
+
+
+rm ~/Simulation/Code/000/v/mytask
+for (( i = 1 ; i <= 50; i++ )); do  cd ~/Simulation/Code/000/v/vv-GLG/$i; if [ -f .RData ]; then echo $i >> ~/Simulation/Code/000/v/mytask; fi; done 
