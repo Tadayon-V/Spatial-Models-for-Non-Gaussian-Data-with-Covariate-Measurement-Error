@@ -1,0 +1,15 @@
+# Title: Spatial Models for Non-Gaussian Data with Covariates Measurement Error
+
+# Author: Vahid Tadayon and Mahmoud Torabi
+
+# Software: R version 3.3.1
+
+
+# The txt files called:
+#     “Code1.txt”, “Code2.txt”, “Code3.txt”, “Code4.txt”, “Code5.txt”, “Code6.txt” and “Code7.txt” 
+# produce the result of Table 5, and the txt file called:
+#                       “Code”
+# produce the result of Tables 4-5.
+
+
+# The data file needed to run the R code above is “PM10.csv”
